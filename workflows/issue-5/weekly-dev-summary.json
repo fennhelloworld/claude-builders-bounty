@@ -1,0 +1,402 @@
+{
+  "name": "Weekly Dev Summary — n8n + Claude",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Weekly Trigger (Mon 9am)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "githubOwner",
+              "value": "={{ $env.GITHUB_OWNER || 'your-org' }}"
+            },
+            {
+              "name": "githubRepo",
+              "value": "={{ $env.GITHUB_REPO || 'your-repo' }}"
+            },
+            {
+              "name": "language",
+              "value": "={{ $env.SUMMARY_LANGUAGE || 'EN' }}"
+            },
+            {
+              "name": "slackWebhookUrl",
+              "value": "={{ $env.SLACK_WEBHOOK_URL || '' }}"
+            },
+            {
+              "name": "claudeApiKey",
+              "value": "={{ $env.CLAUDE_API_KEY || '' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000002",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "weekStart",
+              "name": "weekStart",
+              "value": "={{ $today.minus({days:7}).toFormat('yyyy-MM-dd') }}",
+              "type": "string"
+            },
+            {
+              "id": "weekEnd",
+              "name": "weekEnd",
+              "value": "={{ $today.toFormat('yyyy-MM-dd') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000003",
+      "name": "Compute Date Range",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.githubOwner }}/{{ $json.githubRepo }}/commits?since={{ $json.weekStart }}T00:00:00Z&until={{ $json.weekEnd }}T23:59:59Z&per_page=100",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000004",
+      "name": "Fetch Commits",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, -100],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "GITHUB_HEADER_AUTH",
+          "name": "GitHub API Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $('Config').item.json.githubOwner }}/{{ $('Config').item.json.githubRepo }}/issues?state=closed&since={{ $('Compute Date Range').item.json.weekStart }}T00:00:00Z&per_page=100",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000005",
+      "name": "Fetch Closed Issues",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 100],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "GITHUB_HEADER_AUTH",
+          "name": "GitHub API Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $('Config').item.json.githubOwner }}/{{ $('Config').item.json.githubRepo }}/pulls?state=closed&sort=updated&direction=desc&per_page=100",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000006",
+      "name": "Fetch Merged PRs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "GITHUB_HEADER_AUTH",
+          "name": "GitHub API Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate data from GitHub API responses\nconst config = $('Config').item.json;\nconst dateRange = $('Compute Date Range').item.json;\nconst weekStart = dateRange.weekStart;\nconst weekEnd = dateRange.weekEnd;\n\n// --- Commits ---\nlet commitsRaw = [];\ntry {\n  commitsRaw = $('Fetch Commits').allItems.map(i => i.json);\n} catch(e) {}\nconst commitCount = commitsRaw.length;\nconst topContributors = {};\ncommitsRaw.forEach(c => {\n  const author = c.author?.login || c.commit?.author?.name || 'unknown';\n  topContributors[author] = (topContributors[author] || 0) + 1;\n});\nconst contributorsSorted = Object.entries(topContributors)\n  .sort((a, b) => b[1] - a[1])\n  .slice(0, 5)\n  .map(([name, count]) => `${name} (${count} commits)`);\nconst commitMessages = commitsRaw.slice(0, 30).map(c =>\n  `- ${c.commit?.message?.split('\\n')[0]} (${c.author?.login || 'unknown'})`\n).join('\\n');\n\n// --- Closed Issues ---\nlet issuesRaw = [];\ntry {\n  issuesRaw = $('Fetch Closed Issues').allItems.map(i => i.json);\n} catch(e) {}\nconst closedIssues = issuesRaw.filter(i => !i.pull_request);\nconst closedIssuesCount = closedIssues.length;\nconst closedIssuesList = closedIssues.slice(0, 20).map(i =>\n  `- #${i.number} ${i.title}`\n).join('\\n');\n\n// --- Merged PRs ---\nlet prsRaw = [];\ntry {\n  prsRaw = $('Fetch Merged PRs').allItems.map(i => i.json);\n} catch(e) {}\nconst mergedPRs = prsRaw.filter(pr => pr.merged_at && pr.merged_at >= weekStart);\nconst mergedPRsCount = mergedPRs.length;\nconst mergedPRsList = mergedPRs.slice(0, 20).map(pr =>\n  `- #${pr.number} ${pr.title} (@${pr.user?.login})`\n).join('\\n');\n\nreturn [{\n  json: {\n    weekStart,\n    weekEnd,\n    repo: `${config.githubOwner}/${config.githubRepo}`,\n    language: config.language,\n    slackWebhookUrl: config.slackWebhookUrl,\n    commitCount,\n    contributorsSorted,\n    commitMessages,\n    closedIssuesCount,\n    closedIssuesList,\n    mergedPRsCount,\n    mergedPRsList\n  }\n}];"
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000007",
+      "name": "Aggregate Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 2048,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"You are a developer relations assistant. Write a weekly development summary for the GitHub repo {{ $json.repo }} covering {{ $json.weekStart }} to {{ $json.weekEnd }}. {{ $json.language === 'FR' ? 'Write in French.' : 'Write in English.' }}\\n\\nHere is the raw data:\\n\\n## Commits ({{ $json.commitCount }} total)\\n{{ $json.commitMessages }}\\n\\n## Top Contributors\\n{{ $json.contributorsSorted.join(', ') }}\\n\\n## Merged PRs ({{ $json.mergedPRsCount }})\\n{{ $json.mergedPRsList }}\\n\\n## Closed Issues ({{ $json.closedIssuesCount }})\\n{{ $json.closedIssuesList }}\\n\\n---\\n\\nProduce a well-structured Markdown summary with these sections:\\n1. **Overview** — 2-3 sentence narrative of the week\\n2. **By the Numbers** — commits, PRs merged, issues closed\\n3. **Top Contributors** — list with commit counts\\n4. **Key Changes** — bullet points of the most important PRs and commits\\n5. **Closed Issues** — brief list\\n6. **Looking Ahead** — a short encouraging closing line\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000008",
+      "name": "Generate Summary (Claude)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CLAUDE_HEADER_AUTH",
+          "name": "Claude API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract the markdown summary from Claude's response\nconst claudeResponse = $input.first().json;\nconst markdown = claudeResponse.content?.[0]?.text || 'No summary generated.';\nconst data = $('Aggregate Data').first().json;\n\nreturn [{\n  json: {\n    markdown,\n    repo: data.repo,\n    weekStart: data.weekStart,\n    weekEnd: data.weekEnd,\n    slackWebhookUrl: data.slackWebhookUrl\n  }\n}];"
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000009",
+      "name": "Extract Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-slack-webhook",
+              "leftValue": "={{ $json.slackWebhookUrl }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000010",
+      "name": "Has Slack Webhook?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1560, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.slackWebhookUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"text\": \"📋 *Weekly Dev Summary — {{ $json.repo }}*\\n_{{ $json.weekStart }} → {{ $json.weekEnd }}_\\n\\n{{ $json.markdown }}\",\n  \"mrkdwn\": true\n}",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000011",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, -100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log output for manual inspection / n8n execution history\nconst summary = $input.first().json;\nconsole.log('=== WEEKLY DEV SUMMARY ===');\nconsole.log(`Repo: ${summary.repo}`);\nconsole.log(`Week: ${summary.weekStart} → ${summary.weekEnd}`);\nconsole.log(summary.markdown);\nconsole.log('=== END ===');\n\nreturn [{\n  json: {\n    success: true,\n    repo: summary.repo,\n    weekStart: summary.weekStart,\n    weekEnd: summary.weekEnd,\n    markdown: summary.markdown,\n    deliveredTo: 'execution-log-only'\n  }\n}];",
+        "note": "When no Slack webhook is configured, the summary is available in the n8n execution log and can be sent via any other method."
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000012",
+      "name": "Log Summary (No Slack)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 100]
+    }
+  ],
+  "connections": {
+    "Weekly Trigger (Mon 9am)": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Compute Date Range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Date Range": {
+      "main": [
+        [
+          {
+            "node": "Fetch Commits",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Closed Issues",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Merged PRs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Commits": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Closed Issues": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Merged PRs": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Data": {
+      "main": [
+        [
+          {
+            "node": "Generate Summary (Claude)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Summary (Claude)": {
+      "main": [
+        [
+          {
+            "node": "Extract Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Summary": {
+      "main": [
+        [
+          {
+            "node": "Has Slack Webhook?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Slack Webhook?": {
+      "main": [
+        [
+          {
+            "node": "Post to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Summary (No Slack)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "weekly-summary"
+    },
+    {
+      "name": "claude-api"
+    },
+    {
+      "name": "github"
+    }
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2026-05-30T11:20:00.000Z",
+  "versionId": "1"
+}
