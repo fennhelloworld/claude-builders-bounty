@@ -63,15 +63,55 @@ def log_blocked(command: str, pattern: str) -> None:
         f.write(f"[{timestamp}] BLOCKED: command={command!r} matched={pattern!r}\n")
 
 
+def _split_chain_commands(command: str) -> list[str]:
+    """Split a command string by shell chain operators (; && || |) into sub-commands.
+
+    This prevents bypasses where a dangerous command is appended after an
+    allowed command, e.g. ``rm -rf /tmp/build; rm -rf /``.
+    """
+    # Split on shell chain operators: ; && || |
+    # Use regex to split while preserving quoted strings
+    parts = re.split(r""";(?!=)|\s*&&\s*|\s*\|\|\s*|\s*\|\s*""", command)
+    return [p.strip() for p in parts if p.strip()]
+
+
 def is_blocked(command: str, config: dict | None = None) -> tuple[bool, str]:
     if config is None:
         config = load_config()
-    for allowed in config.get("allowed_patterns", []):
-        if re.search(allowed, command, re.IGNORECASE):
-            return False, ""
+
+    # --- Layer 1: check every sub-command independently against blocked patterns ---
+    sub_commands = _split_chain_commands(command)
+    for sub in sub_commands:
+        for pattern in config.get("patterns", []):
+            if re.search(pattern, sub, re.IGNORECASE):
+                # Only allow-skip if *this* sub-command matches an allowed pattern
+                allowed_for_sub = False
+                for allowed in config.get("allowed_patterns", []):
+                    if re.search(allowed, sub, re.IGNORECASE):
+                        allowed_for_sub = True
+                        break
+                if not allowed_for_sub:
+                    return True, pattern
+
+    # --- Layer 2: scan the full command string for dangerous patterns ---
+    # This catches cases where splitting might miss something, or where a
+    # dangerous fragment is embedded in a way that splitting doesn't isolate.
     for pattern in config.get("patterns", []):
         if re.search(pattern, command, re.IGNORECASE):
-            return True, pattern
+            # Only return blocked if the full-command match isn't covered by an allowed pattern
+            full_allowed = False
+            for allowed in config.get("allowed_patterns", []):
+                if re.search(allowed, command, re.IGNORECASE):
+                    full_allowed = True
+                    break
+            if not full_allowed:
+                return True, pattern
+
+    # --- Layer 3 (legacy compatibility): full command allowed check ---
+    # If a single sub-command matches an allowed pattern, that only covers
+    # *that* sub-command (handled above). The full command must also be
+    # checked — but at this point we already verified no sub-command is
+    # blocked, so we can safely return allowed.
     return False, ""
 
 
