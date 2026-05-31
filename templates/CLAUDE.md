@@ -6,12 +6,12 @@
 
 | Layer | Technology | Version |
 |-------|-----------|---------|
-| Framework | Next.js (App Router) | 14.x |
+| Framework | Next.js (App Router) | 15.x |
 | Language | TypeScript | 5.x |
-| Styling | Tailwind CSS | 3.x |
+| Styling | Tailwind CSS | 4.x |
 | Database | SQLite (better-sqlite3) | 9.x |
 | ORM | Drizzle ORM | 0.x |
-| Auth | NextAuth.js | 4.x |
+| Auth | Auth.js (NextAuth v5) | 5.x |
 | Validation | Zod | 3.x |
 | Testing | Vitest + Testing Library | latest |
 | Deployment | Vercel / Docker | latest |
@@ -37,7 +37,7 @@ project/
 ├── lib/                   # Core utilities
 │   ├── db.ts             # Database connection
 │   ├── schema.ts         # Drizzle schema definitions
-│   ├── auth.ts           # NextAuth configuration
+│   ├── auth.ts           # Auth.js (NextAuth v5) configuration
 │   └── validators.ts     # Zod schemas
 ├── server/               # Server-only code
 │   ├── trpc.ts           # tRPC setup
@@ -62,6 +62,7 @@ project/
 
 ### Component Patterns
 - Server Components by default; add `"use client"` only when needed
+- Use Server Actions (`"use server"`) for mutations instead of API routes where possible
 - Colocate types with components using `interface Props {}`
 - Use composition over prop drilling; reach for context sparingly
 
@@ -178,8 +179,11 @@ docker run -p 3000:3000 -v ./data:/app/data my-saas
 ## Architecture Decisions
 
 - **App Router** over Pages Router for nested layouts and server components
+- **Next.js 15** with async Request APIs and improved Server Actions as the default mutation pattern
+- **Auth.js v5** over NextAuth v4 for native App Router middleware and edge-compatible sessions
 - **Drizzle** over Prisma for SQLite performance and type safety
 - **tRPC** over REST for type-safe client-server communication
+- **Tailwind CSS v4** with CSS-native configuration over v3 JS config
 - **Zod** for runtime validation at API boundaries
 - **Vitest** over Jest for ESM compatibility and speed
 - **SQLite** over Postgres for simplicity; migrate to Turso/LibSQL for scale
@@ -187,7 +191,7 @@ docker run -p 3000:3000 -v ./data:/app/data my-saas
 ## Security Checklist
 
 - [ ] All API routes validate input with Zod
-- [ ] Auth required on protected routes via NextAuth
+- [ ] Auth required on protected routes via Auth.js
 - [ ] CSRF protection via Next.js built-in
 - [ ] SQL injection impossible via Drizzle parameterized queries
 - [ ] Rate limiting on auth endpoints
