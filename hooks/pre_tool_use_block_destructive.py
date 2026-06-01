@@ -63,15 +63,31 @@ def log_blocked(command: str, pattern: str) -> None:
         f.write(f"[{timestamp}] BLOCKED: command={command!r} matched={pattern!r}\n")
 
 
+# Critical patterns that, if found ANYWHERE in the full command string, will
+# ALWAYS block — no allow-list override is permitted.  These specifically
+# target root-filesystem destruction where "/" is the complete target path
+# (not a prefix like /tmp/) and must never be bypassable via chaining or
+# allow-list misconfiguration.
+CRITICAL_FULL_COMMAND_PATTERNS = [
+    # rm … /  (root as final argument, possibly followed by comment / chain op)
+    r"rm\s+(?:-\w*\s+)*?/\s*(?:$|[;&|\n#])",
+    # rm --recursive --force /  (long-flag variants)
+    r"rm\s+--recursive\s+--force\s+/\s*(?:$|[;&|\n#])",
+    r"rm\s+--force\s+--recursive\s+/\s*(?:$|[;&|\n#])",
+]
+
+
 def _split_chain_commands(command: str) -> list[str]:
-    """Split a command string by shell chain operators (; && || |) into sub-commands.
+    """Split a command string by shell chain operators (; && || |) and newlines.
 
     This prevents bypasses where a dangerous command is appended after an
     allowed command, e.g. ``rm -rf /tmp/build; rm -rf /``.
+    Newlines are also treated as command separators since ``\\n`` acts like
+    ``;`` in most shells.
     """
-    # Split on shell chain operators: ; && || |
-    # Use regex to split while preserving quoted strings
-    parts = re.split(r""";(?!=)|\s*&&\s*|\s*\|\|\s*|\s*\|\s*""", command)
+    # Split on shell chain operators: ; && || |  and newlines
+    # ;(?!=) avoids splitting inside for-loop arithmetic: for((i=0;i<10;i++))
+    parts = re.split(r""";(?!=)|\s*&&\s*|\s*\|\|\s*|\s*\|\s*|\n""", command)
     return [p.strip() for p in parts if p.strip()]
 
 
@@ -79,39 +95,48 @@ def is_blocked(command: str, config: dict | None = None) -> tuple[bool, str]:
     if config is None:
         config = load_config()
 
-    # --- Layer 1: check every sub-command independently against blocked patterns ---
+    deny_patterns = config.get("patterns", [])
+    allow_patterns = config.get("allowed_patterns", [])
+
+    # --- Layer 0: critical full-command safety net ---
+    # Patterns so dangerous they block regardless of any allow-list match.
+    # This catches root-filesystem deletion even if an allow-list entry
+    # elsewhere in the command string would otherwise bypass the check.
+    for pattern in CRITICAL_FULL_COMMAND_PATTERNS:
+        if re.search(pattern, command, re.IGNORECASE):
+            return True, pattern
+
+    # --- Layer 1: per-sub-command check ---
+    # Split on chain operators and check each sub-command independently.
+    # The allow-list is applied PER SUB-COMMAND only — a match on one
+    # sub-command does NOT exempt a different sub-command from the deny list.
     sub_commands = _split_chain_commands(command)
     for sub in sub_commands:
-        for pattern in config.get("patterns", []):
+        for pattern in deny_patterns:
             if re.search(pattern, sub, re.IGNORECASE):
-                # Only allow-skip if *this* sub-command matches an allowed pattern
-                allowed_for_sub = False
-                for allowed in config.get("allowed_patterns", []):
-                    if re.search(allowed, sub, re.IGNORECASE):
-                        allowed_for_sub = True
-                        break
+                # Only exempt if THIS specific sub-command matches an allow pattern
+                allowed_for_sub = any(
+                    re.search(allowed, sub, re.IGNORECASE)
+                    for allowed in allow_patterns
+                )
                 if not allowed_for_sub:
                     return True, pattern
 
-    # --- Layer 2: scan the full command string for dangerous patterns ---
-    # This catches cases where splitting might miss something, or where a
-    # dangerous fragment is embedded in a way that splitting doesn't isolate.
-    for pattern in config.get("patterns", []):
+    # --- Layer 2: full-command deny check (pipe-pattern safety net) ---
+    # Some deny patterns span across the pipe operator (e.g.
+    # ``curl … | sh``).  Splitting on ``|`` breaks those patterns, so we
+    # must also scan the un-split command string.  At this point every
+    # sub-command has already been individually verified as safe, so the
+    # only deny matches here are cross-operator patterns.
+    for pattern in deny_patterns:
         if re.search(pattern, command, re.IGNORECASE):
-            # Only return blocked if the full-command match isn't covered by an allowed pattern
-            full_allowed = False
-            for allowed in config.get("allowed_patterns", []):
-                if re.search(allowed, command, re.IGNORECASE):
-                    full_allowed = True
-                    break
+            full_allowed = any(
+                re.search(allowed, command, re.IGNORECASE)
+                for allowed in allow_patterns
+            )
             if not full_allowed:
                 return True, pattern
 
-    # --- Layer 3 (legacy compatibility): full command allowed check ---
-    # If a single sub-command matches an allowed pattern, that only covers
-    # *that* sub-command (handled above). The full command must also be
-    # checked — but at this point we already verified no sub-command is
-    # blocked, so we can safely return allowed.
     return False, ""
 
 
