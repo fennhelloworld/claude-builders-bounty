@@ -270,6 +270,16 @@ class TestCustomConfig(unittest.TestCase):
         blocked, _ = is_blocked("danger but safe", config)
         self.assertFalse(blocked)
 
+    def test_custom_allowed_does_not_override_critical(self):
+        """Custom allow-list cannot override critical root-filesystem patterns."""
+        # Even with a wildcard allow pattern, root delete must still be blocked
+        config = {
+            "patterns": [r"rm\s+-rf\s+/"],
+            "allowed_patterns": [r"rm\s+-rf\s+/tmp/"],
+        }
+        blocked, _ = is_blocked("rm -rf /tmp/build; rm -rf /", config)
+        self.assertTrue(blocked)
+
 
 if __name__ == "__main__":
     unittest.main()
