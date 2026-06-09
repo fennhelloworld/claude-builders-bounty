@@ -1,4 +1,4 @@
-# CLAUDE.md — Next.js + SQLite SaaS Project
+# CLAUDE.md — Next.js 15 + SQLite SaaS Project
 
 > AI assistant context file for Claude Code / Cursor / Windsurf
 
@@ -29,6 +29,7 @@ project/
 │   │   └── page.tsx
 │   ├── api/               # API routes
 │   │   └── trpc/
+│   ├── globals.css        # Tailwind v4: @import "tailwindcss"
 │   ├── layout.tsx         # Root layout
 │   └── page.tsx           # Landing page
 ├── components/            # Shared React components
@@ -37,7 +38,7 @@ project/
 ├── lib/                   # Core utilities
 │   ├── db.ts             # Database connection
 │   ├── schema.ts         # Drizzle schema definitions
-│   ├── auth.ts           # Auth.js (NextAuth v5) configuration
+│   ├── auth.ts           # Auth.js v5 config (handlers, auth, signIn, signOut)
 │   └── validators.ts     # Zod schemas
 ├── server/               # Server-only code
 │   ├── trpc.ts           # tRPC setup
@@ -47,7 +48,8 @@ project/
 ├── tests/                # Test files
 ├── CLAUDE.md             # This file
 ├── drizzle.config.ts     # Drizzle config
-├── next.config.js        # Next.js config
+├── middleware.ts          # Auth.js v5 middleware (route protection)
+├── next.config.ts        # Next.js 15 TypeScript config
 └── tsconfig.json         # TypeScript config
 ```
 
@@ -63,8 +65,26 @@ project/
 ### Component Patterns
 - Server Components by default; add `"use client"` only when needed
 - Use Server Actions (`"use server"`) for mutations instead of API routes where possible
+- In Next.js 15, Server Actions are async functions with `"use server"` directive; use `useActionState` (formerly `useFormState`) for form handling with pending states
+- Server Actions receive `FormData` or typed arguments; validate inputs with Zod before processing
 - Colocate types with components using `interface Props {}`
 - Use composition over prop drilling; reach for context sparingly
+
+### Auth.js v5 Conventions
+- Configure in `lib/auth.ts` using `NextAuth()` factory: `export const { handlers, auth, signIn, signOut } = NextAuth(config)`
+- Route handlers in `app/api/auth/[...nextauth]/route.ts` re-export `handlers` from `lib/auth.ts`
+- Middleware in `middleware.ts` uses `auth` export for route protection: `export default auth((req) => { ... })`
+- Access session in Server Components via `auth()` (no `"use client"` needed)
+- Access session in Client Components via `useSession()` hook from `next-auth/react`
+- Next.js 15 async APIs: `auth()` returns a Promise — always `await auth()`
+- Edge-compatible by default; avoid Node.js-specific APIs in auth config
+
+### Tailwind CSS v4 Conventions
+- No `tailwind.config.js` — v4 uses CSS-native configuration via `@import "tailwindcss"` in `app/globals.css`
+- Customize theme with `@theme` directive in CSS: `@theme { --color-primary: #3b82f6; }`
+- Use `@variant` for custom variants instead of JavaScript plugins
+- Utility classes remain the same; only configuration approach changed
+- Third-party plugins use `@plugin` directive instead of JS config
 
 ### Naming
 - Files: `kebab-case.tsx` for components, `camelCase.ts` for utilities
@@ -175,6 +195,9 @@ docker run -p 3000:3000 -v ./data:/app/data my-saas
 | Hardcoded secrets | Environment variables + `.env.local` |
 | `eval()` or `new Function()` | Never — security risk |
 | Synchronous DB in API routes | better-sqlite3 is sync; keep API routes thin |
+| `tailwind.config.js` | Tailwind v4 uses CSS-native `@theme` in `globals.css` |
+| `next.config.js` | Next.js 15 prefers `next.config.ts` (TypeScript) |
+| NextAuth v4 `[...nextauth].ts` | Auth.js v5 uses `route.ts` with `handlers` export |
 
 ## Architecture Decisions
 
@@ -191,7 +214,7 @@ docker run -p 3000:3000 -v ./data:/app/data my-saas
 ## Security Checklist
 
 - [ ] All API routes validate input with Zod
-- [ ] Auth required on protected routes via Auth.js
+- [ ] Auth required on protected routes via Auth.js middleware
 - [ ] CSRF protection via Next.js built-in
 - [ ] SQL injection impossible via Drizzle parameterized queries
 - [ ] Rate limiting on auth endpoints
